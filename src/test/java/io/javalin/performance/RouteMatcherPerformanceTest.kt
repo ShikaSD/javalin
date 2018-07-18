@@ -8,9 +8,11 @@ import io.javalin.core.HandlerEntry
 import io.javalin.core.HandlerType
 import io.javalin.core.util.ContextUtil.urlDecode
 import io.javalin.core.util.Util
+import jdk.nashorn.internal.objects.NativeArray.forEach
 import org.junit.Ignore
 import org.junit.Rule
 import org.junit.Test
+import org.junit.Assert.*
 
 typealias NewHandlerEntry = HandlerEntry
 
@@ -90,6 +92,77 @@ class RouteMatcherPerformanceTest {
     fun newSplat(entry: NewHandlerEntry, path: String) = entry.extractSplats(path)
     fun newParams(entry: NewHandlerEntry, path: String) = entry.extractPathParams(path)
 
+    fun matchV2(route: String, path: String): Boolean {
+
+        var pathIndex = 0
+        var routeIndex = 0
+
+        while (pathIndex < path.length && routeIndex < route.length) {
+
+            // Get current symbol
+            val pathSymbol = path[pathIndex]
+            val routeSymbol = route[routeIndex]
+
+            when {
+                routeSymbol == ':' -> {
+                    // Path parameter, skip until next separator
+                    while (pathIndex.lengthGuard(path) && path[pathIndex] != '/') pathIndex++
+                    while (routeIndex.lengthGuard(route) && route[routeIndex] != '/') routeIndex++
+                }
+                routeSymbol == '*' -> {
+                    // Splat, return true if the last element
+                    if (routeIndex == route.lastIndex) return true
+
+                    // Or try to match substring until we reach the end or the next splat
+                    var splatIndex = routeIndex
+
+                    while (pathIndex < path.length) {
+                        // First try to find a common place
+                        while (pathIndex.lengthGuard(path) && path[pathIndex] != route[routeIndex]) pathIndex++
+
+                        // If path ended without one, it does not match
+                        if (pathIndex == path.length) return false
+
+                        // Check common area until we reach the end or find the next splat
+                        while (pathIndex.lengthGuard(path)
+                            && routeIndex.lengthGuard(route)
+                            && path[pathIndex] == route[routeIndex]
+                            && route[routeIndex] != '*'
+                        ) {
+                            pathIndex++
+                            routeIndex++
+                        }
+
+                        // Reached the end of both strings, they should match
+                        if (pathIndex == path.length && routeIndex == route.length) return true
+
+                        // However if only route is finished, they do not
+                        if (routeIndex == route.length) return false
+
+                        // If reached the splat, update splat index
+                        if (route[routeIndex] == '*') {
+                            // Check for the last element
+                            if (routeIndex == route.lastIndex) return true
+
+                            splatIndex = routeIndex
+                        }
+
+                        // Go to latest splat and try to match path again
+                        routeIndex = splatIndex + 1
+                    }
+                }
+                routeSymbol != pathSymbol -> return false
+            }
+
+            pathIndex++
+            routeIndex++
+        }
+
+        return pathIndex == path.length && routeIndex == route.length
+    }
+
+    inline fun Int.lengthGuard(string: String) = this < string.length
+
     companion object {
         val routes = listOf(
                 "/test/:user/some/path/here",
@@ -98,7 +171,9 @@ class RouteMatcherPerformanceTest {
                 "/test/has/splat/at/the/end/*",
                 "/test/:id/simple/route/:user/create/",
                 "/matches/all/*/user",
-                "/test/*"
+                "/matches/all/*/user/*/more",
+                "/test/*",
+                "/hello"
         )
 
         val oldEntries = routes.map { OldHandlerEntry(HandlerType.AFTER, it, Handler { }) }
@@ -116,8 +191,9 @@ class RouteMatcherPerformanceTest {
                 "/test/1/simple/route/John/create/",
                 "/test/2/simple/route/Lisa/create/",
                 "/test/3/simple/route/Temp/create/",
-                "/matches/all/that/ends/with/user/",
-                "/matches/all/that/user/"
+                "/matches/all/that/ends/with/user",
+                "/matches/all/that/ends/with/user/and/even/more",
+                "/matches/all/that/user"
         )
     }
 
@@ -140,6 +216,31 @@ class RouteMatcherPerformanceTest {
             }
         }
     }
+
+    @Ignore("Manual execution")
+    @Test
+    fun testV2MatchingPerfomance() {
+        testEntries.forEach { requestUri ->
+            routes.forEach { entry ->
+                matchV2(entry, requestUri)
+            }
+        }
+    }
+
+    @Ignore("Manual execution")
+    @Test
+    fun verifyV2MatchingPerfomance() {
+        testEntries.forEach { requestUri ->
+            routes.forEachIndexed { i, entry ->
+                assertEquals(
+                    "$requestUri matches $entry",
+                    newEntries[i].matches(requestUri),
+                    matchV2(entry, requestUri)
+                )
+            }
+        }
+    }
+
 
     @Ignore("Manual execution")
     @Test
