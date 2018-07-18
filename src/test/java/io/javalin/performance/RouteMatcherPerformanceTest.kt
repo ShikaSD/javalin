@@ -110,20 +110,24 @@ class RouteMatcherPerformanceTest {
                     while (routeIndex.lengthGuard(route) && route[routeIndex] != '/') routeIndex++
                 }
                 routeSymbol == '*' -> {
-                    // Splat, return true if the last element
+                    // Matches if splat at the end
                     if (routeIndex == route.lastIndex) return true
 
                     // Or try to match substring until we reach the end or the next splat
                     var splatIndex = routeIndex
 
                     while (pathIndex < path.length) {
+
+                        // Go to latest splat and try to match path again
+                        routeIndex = splatIndex + 1
+
                         // First try to find a common place
                         while (pathIndex.lengthGuard(path) && path[pathIndex] != route[routeIndex]) pathIndex++
 
                         // If path ended without one, it does not match
                         if (pathIndex == path.length) return false
 
-                        // Check common area until we reach the end or find the next splat
+                        // Check common substring until we reach the end or find the next splat
                         while (pathIndex.lengthGuard(path)
                             && routeIndex.lengthGuard(route)
                             && path[pathIndex] == route[routeIndex]
@@ -141,14 +145,11 @@ class RouteMatcherPerformanceTest {
 
                         // If reached the splat, update splat index
                         if (route[routeIndex] == '*') {
-                            // Check for the last element
+                            // Matches if splat at the end
                             if (routeIndex == route.lastIndex) return true
 
                             splatIndex = routeIndex
                         }
-
-                        // Go to latest splat and try to match path again
-                        routeIndex = splatIndex + 1
                     }
                 }
                 routeSymbol != pathSymbol -> return false

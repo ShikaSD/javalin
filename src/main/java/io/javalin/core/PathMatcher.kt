@@ -19,7 +19,7 @@ data class HandlerEntry(val type: HandlerType, val path: String, val handler: Ha
 }
 
 class PathParser(
-        path: String,
+        private val path: String,
         private val pathParamNames: List<String> = path.split("/")
                 .filter { it.startsWith(":") }
                 .map { it.replace(":", "") },
@@ -36,7 +36,7 @@ class PathParser(
         private val splatRegex: Regex = matchRegex.pattern.replace(".*?", "(.*?)").toRegex(),
         private val pathParamRegex: Regex = matchRegex.pattern.replace("[^/]+?", "([^/]+?)").toRegex()) {
 
-    fun matches(url: String) = url matches matchRegex
+    fun matches(url: String) = matchV2(path.removeSuffix("/"), url.removeSuffix("/"))
 
     fun extractPathParams(url: String) = pathParamNames.zip(values(pathParamRegex, url)) { name, value ->
         name.toLowerCase() to urlDecode(value)
@@ -47,6 +47,77 @@ class PathParser(
     // Match and group values, then drop first element (the input string)
     private fun values(regex: Regex, url: String) = regex.matchEntire(url)?.groupValues?.drop(1) ?: emptyList()
 
+    fun matchV2(route: String, path: String): Boolean {
+
+        var pathIndex = 0
+        var routeIndex = 0
+
+        while (pathIndex < path.length && routeIndex < route.length) {
+
+            // Get current symbol
+            val pathSymbol = path[pathIndex]
+            val routeSymbol = route[routeIndex]
+
+            when {
+                routeSymbol == ':' -> {
+                    // Path parameter, skip until next separator
+                    while (pathIndex.lengthGuard(path) && path[pathIndex] != '/') pathIndex++
+                    while (routeIndex.lengthGuard(route) && route[routeIndex] != '/') routeIndex++
+                }
+                routeSymbol == '*' -> {
+                    // Matches if splat at the end
+                    if (routeIndex == route.lastIndex) return true
+
+                    // Or try to match substring until we reach the end or the next splat
+                    var splatIndex = routeIndex
+
+                    while (pathIndex < path.length) {
+
+                        // Go to latest splat and try to match path again
+                        routeIndex = splatIndex + 1
+
+                        // First try to find a common place
+                        while (pathIndex.lengthGuard(path) && path[pathIndex] != route[routeIndex]) pathIndex++
+
+                        // If path ended without one, it does not match
+                        if (pathIndex == path.length) return false
+
+                        // Check common substring until we reach the end or find the next splat
+                        while (pathIndex.lengthGuard(path)
+                            && routeIndex.lengthGuard(route)
+                            && path[pathIndex] == route[routeIndex]
+                            && route[routeIndex] != '*'
+                        ) {
+                            pathIndex++
+                            routeIndex++
+                        }
+
+                        // Reached the end of both strings, they should match
+                        if (pathIndex == path.length && routeIndex == route.length) return true
+
+                        // However if only route is finished, they do not
+                        if (routeIndex == route.length) return false
+
+                        // If reached the splat, update splat index
+                        if (route[routeIndex] == '*') {
+                            // Matches if splat at the end
+                            if (routeIndex == route.lastIndex) return true
+
+                            splatIndex = routeIndex
+                        }
+                    }
+                }
+                routeSymbol != pathSymbol -> return false
+            }
+
+            pathIndex++
+            routeIndex++
+        }
+
+        return pathIndex >= path.length && routeIndex >= route.length
+    }
+
+    inline fun Int.lengthGuard(string: String) = this < string.length
 }
 
 class PathMatcher(var ignoreTrailingSlashes: Boolean = true) {
