@@ -8,11 +8,12 @@ import io.javalin.core.HandlerEntry
 import io.javalin.core.HandlerType
 import io.javalin.core.util.ContextUtil.urlDecode
 import io.javalin.core.util.Util
-import jdk.nashorn.internal.objects.NativeArray.forEach
+import io.javalin.performance.RouteMatcherPerformanceTest.EntriesV2.Graph.Builder.Companion.TERMINAL
 import org.junit.Ignore
 import org.junit.Rule
 import org.junit.Test
 import org.junit.Assert.*
+import java.util.*
 
 typealias NewHandlerEntry = HandlerEntry
 
@@ -92,93 +93,178 @@ class RouteMatcherPerformanceTest {
     fun newSplat(entry: NewHandlerEntry, path: String) = entry.extractSplats(path)
     fun newParams(entry: NewHandlerEntry, path: String) = entry.extractPathParams(path)
 
-    fun matchV2(route: String, path: String): Boolean {
+    class EntriesV2(private val values: CharArray, private val graph: Graph) {
 
-        var pathIndex = 0
-        var routeIndex = 0
+        class Builder {
+            private val values = mutableListOf('.')
+            private val graphBuilder = Graph.Builder()
 
-        while (pathIndex < path.length && routeIndex < route.length) {
-
-            // Get current symbol
-            val pathSymbol = path[pathIndex]
-            val routeSymbol = route[routeIndex]
-
-            when {
-                routeSymbol == ':' -> {
-                    // Path parameter, skip until next separator
-                    while (pathIndex.lengthGuard(path) && path[pathIndex] != '/') pathIndex++
-                    while (routeIndex.lengthGuard(route) && route[routeIndex] != '/') routeIndex++
-                }
-                routeSymbol == '*' -> {
-                    // Matches if splat at the end
-                    if (routeIndex == route.lastIndex) return true
-
-                    // Or try to match substring until we reach the end or the next splat
-                    var splatIndex = routeIndex
-
-                    while (pathIndex < path.length) {
-
-                        // Go to latest splat and try to match path again
-                        routeIndex = splatIndex + 1
-
-                        // First try to find a common place
-                        while (pathIndex.lengthGuard(path) && path[pathIndex] != route[routeIndex]) pathIndex++
-
-                        // If path ended without one, it does not match
-                        if (pathIndex == path.length) return false
-
-                        // Check common substring until we reach the end or find the next splat
-                        while (pathIndex.lengthGuard(path)
-                            && routeIndex.lengthGuard(route)
-                            && path[pathIndex] == route[routeIndex]
-                            && route[routeIndex] != '*'
-                        ) {
-                            pathIndex++
-                            routeIndex++
-                        }
-
-                        // Reached the end of both strings, they should match
-                        if (pathIndex == path.length && routeIndex == route.length) return true
-
-                        // However if only route is finished, they do not
-                        if (routeIndex == route.length) return false
-
-                        // If reached the splat, update splat index
-                        if (route[routeIndex] == '*') {
-                            // Matches if splat at the end
-                            if (routeIndex == route.lastIndex) return true
-
-                            splatIndex = routeIndex
-                        }
-                    }
-                }
-                routeSymbol != pathSymbol -> return false
+            fun add(route: String) {
+                parse(route)
             }
 
-            pathIndex++
-            routeIndex++
+            private fun parse(route: String) {
+                var routeIndex = 0
+                var valueIndex = 0
+
+                while (routeIndex < route.length) {
+
+                    var nextValue = graphBuilder.first(valueIndex)
+
+                    while (nextValue != -1) {
+                        val end = graphBuilder.end(nextValue)
+                        if (values[end] == route[routeIndex]) {
+                            valueIndex = end
+                            routeIndex++
+                            break
+                        }
+
+                        nextValue = graphBuilder.next(nextValue)
+                    }
+
+                    if (nextValue == -1) {
+                        break
+                    }
+                }
+
+                //add remainings of route
+                while (routeIndex < route.length) {
+                    values.add(route[routeIndex])
+                    val newLetterIndex = values.lastIndex
+                    graphBuilder.add(valueIndex, newLetterIndex)
+                    valueIndex = newLetterIndex
+                    routeIndex++
+                }
+            }
+
+            fun build() = EntriesV2(
+                values.toCharArray(),
+                graphBuilder.build()
+            )
         }
 
-        return pathIndex == path.length && routeIndex == route.length
-    }
+        class Graph(
+            private val first: IntArray,
+            private val next: IntArray,
+            private val end: IntArray
+        ) {
 
-    inline fun Int.lengthGuard(string: String) = this < string.length
+            class Builder {
+                companion object {
+                    const val TERMINAL = -1
+                }
+
+                private var nextEdge = 0
+
+                private var first = LinkedList<Int>()
+                private var next = LinkedList<Int>()
+                private var end = LinkedList<Int>()
+
+                fun add(from: Int, to: Int) {
+                    next.setElement(nextEdge, first.getElement(from))
+                    first.setElement(from, nextEdge)
+                    end.setElement(nextEdge, to)
+
+                    nextEdge++
+                }
+
+                fun first(index: Int): Int = first.getElement(index)
+
+                fun next(index: Int): Int = next.getElement(index)
+
+                fun end(index: Int): Int = end.getElement(index)
+
+                private fun MutableList<Int>.setElement(index: Int, value: Int) {
+                    while (size <= index) {
+                        add(TERMINAL)
+                    }
+                    set(index, value)
+                }
+
+                private fun MutableList<Int>.getElement(index: Int): Int {
+                    if (index >= size) {
+                        return TERMINAL
+                    }
+                    return get(index)
+                }
+
+                fun build() =
+                    Graph(
+                        first.toIntArray(),
+                        next.toIntArray(),
+                        end.toIntArray()
+                    )
+            }
+
+            fun first(index: Int) = first.getOrElse(index) { TERMINAL }
+            fun next(index: Int) = next[index]
+            fun end(index: Int) = end[index]
+        }
+
+        fun edges(i: Int): List<Int> {
+            val iterator: IntIterator = object : IntIterator() {
+                var index = graph.first(i)
+
+                override fun hasNext() = index != -1
+                override fun nextInt() = graph.end(index).also { index = graph.next(index) }
+            }
+            val list = mutableListOf<Int>()
+            iterator.forEach {
+                list += it
+            }
+            return list
+        }
+
+        fun matches(route: String): Boolean {
+            // Traverse and check
+            var routeIndex = 0
+            var valueIndex = 0
+
+            while (routeIndex < route.length) {
+
+                var nextValue = graph.first(valueIndex)
+
+                while (nextValue != -1) {
+                    val end = graph.end(nextValue)
+                    if (values[end] == route[routeIndex]) {
+                        valueIndex = end
+                        routeIndex++
+                        break
+                    }
+
+                    nextValue = graph.next(nextValue)
+                }
+
+                if (nextValue == -1) {
+                    break
+                }
+            }
+
+            return graph.first(valueIndex) == TERMINAL && routeIndex >= route.length // Graph and route fully traversed to match
+        }
+    }
 
     companion object {
         val routes = listOf(
-                "/test/:user/some/path/here",
-                "/test/*/some/more/path/here",
+//                "/test/:user/some/path/here",
+//                "/test/*/some/more/path/here",
                 "/test/path/route/without/splats",
-                "/test/has/splat/at/the/end/*",
-                "/test/:id/simple/route/:user/create/",
-                "/matches/all/*/user",
-                "/matches/all/*/user/*/more",
-                "/test/*",
+//                "/test/has/splat/at/the/end/*",
+//                "/test/:id/simple/route/:user/create/",
+//                "/matches/all/*/user",
+//                "/matches/all/*/user/*/more",
+//                "/test/*",
                 "/hello"
         )
 
         val oldEntries = routes.map { OldHandlerEntry(HandlerType.AFTER, it, Handler { }) }
         val newEntries = routes.map { NewHandlerEntry(HandlerType.AFTER, it, Handler { }, Handler { }) }
+        val entriesV2 = EntriesV2.Builder().run {
+            routes.forEach {
+                add(it)
+            }
+            build()
+        }
 
         val testEntries = listOf(
                 "/test/1234/some/path/here",
@@ -222,23 +308,18 @@ class RouteMatcherPerformanceTest {
     @Test
     fun testV2MatchingPerfomance() {
         testEntries.forEach { requestUri ->
-            routes.forEach { entry ->
-                matchV2(entry, requestUri)
-            }
+            entriesV2.matches(requestUri)
         }
     }
 
     @Ignore("Manual execution")
     @Test
     fun verifyV2MatchingPerfomance() {
-        testEntries.forEach { requestUri ->
-            routes.forEachIndexed { i, entry ->
-                assertEquals(
-                    "$requestUri matches $entry",
-                    newEntries[i].matches(requestUri),
-                    matchV2(entry, requestUri)
-                )
-            }
+        testEntries.forEach { string ->
+            val truth = newEntries.any { it.matches(string) }
+            val sample = entriesV2.matches(string)
+
+            assertEquals(string, truth, sample)
         }
     }
 

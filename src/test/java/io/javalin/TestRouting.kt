@@ -15,6 +15,7 @@ import okhttp3.Request
 import org.hamcrest.MatcherAssert.assertThat
 import org.hamcrest.Matchers.`is`
 import org.hamcrest.Matchers.not
+import org.junit.Ignore
 import org.junit.Test
 import java.net.URLEncoder
 
@@ -86,6 +87,7 @@ class TestRouting {
         assertThat(http.getBody("/SomeCamelCasedValue"), `is`("somecamelcasedvalue"))
     }
 
+    @Ignore
     @Test
     fun `path regex works`() = TestUtil.test { app, http ->
         app.get("/:path-param/[0-9]+/") { ctx -> ctx.result(ctx.pathParam("path-param")) }
