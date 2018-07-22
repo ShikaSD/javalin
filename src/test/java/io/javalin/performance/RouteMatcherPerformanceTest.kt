@@ -8,7 +8,6 @@ import io.javalin.core.HandlerEntry
 import io.javalin.core.HandlerType
 import io.javalin.core.util.ContextUtil.urlDecode
 import io.javalin.core.util.Util
-import io.javalin.performance.RouteMatcherPerformanceTest.EntriesV2.Graph.Builder.Companion.TERMINAL
 import org.junit.Ignore
 import org.junit.Rule
 import org.junit.Test
@@ -95,6 +94,12 @@ class RouteMatcherPerformanceTest {
 
     class EntriesV2(private val values: CharArray, private val graph: Graph) {
 
+        companion object {
+            private const val TERMINAL_INDEX = -1
+            private const val SEPARATOR_CHAR = '/'
+            private const val PARAMETER_CHAR = ':'
+        }
+
         class Builder {
             private val values = mutableListOf('.')
             private val graphBuilder = Graph.Builder()
@@ -109,27 +114,48 @@ class RouteMatcherPerformanceTest {
 
                 while (routeIndex < route.length) {
 
-                    var nextValue = graphBuilder.first(valueIndex)
+                    val routeChar = route[routeIndex]
+                    val value = values[valueIndex]
 
-                    while (nextValue != -1) {
-                        val end = graphBuilder.end(nextValue)
-                        if (values[end] == route[routeIndex]) {
+                    if (routeChar == PARAMETER_CHAR && value == SEPARATOR_CHAR) {
+                        // record current one and skip to the next separator
+                        while (routeIndex + 1 < route.length && route[routeIndex + 1] != SEPARATOR_CHAR) {
+                            routeIndex++
+                        }
+                    }
+
+                    var nextEdge = graphBuilder.first(valueIndex)
+
+                    while (nextEdge != TERMINAL_INDEX) {
+                        val end = graphBuilder.end(nextEdge)
+                        if (values[end] == routeChar) {
                             valueIndex = end
                             routeIndex++
                             break
                         }
 
-                        nextValue = graphBuilder.next(nextValue)
+                        nextEdge = graphBuilder.next(nextEdge)
                     }
 
-                    if (nextValue == -1) {
+                    if (nextEdge == TERMINAL_INDEX) {
                         break
                     }
                 }
 
                 //add remainings of route
                 while (routeIndex < route.length) {
-                    values.add(route[routeIndex])
+                    // TODO: Code duplication
+                    val routeChar = route[routeIndex]
+                    val value = values[valueIndex]
+
+                    if (routeChar == PARAMETER_CHAR && value == SEPARATOR_CHAR) {
+                        // record current one and skip to the next separator
+                        while (routeIndex + 1 < route.length && route[routeIndex + 1] != SEPARATOR_CHAR) {
+                            routeIndex++
+                        }
+                    }
+
+                    values.add(routeChar)
                     val newLetterIndex = values.lastIndex
                     graphBuilder.add(valueIndex, newLetterIndex)
                     valueIndex = newLetterIndex
@@ -150,9 +176,6 @@ class RouteMatcherPerformanceTest {
         ) {
 
             class Builder {
-                companion object {
-                    const val TERMINAL = -1
-                }
 
                 private var nextEdge = 0
 
@@ -176,14 +199,14 @@ class RouteMatcherPerformanceTest {
 
                 private fun MutableList<Int>.setElement(index: Int, value: Int) {
                     while (size <= index) {
-                        add(TERMINAL)
+                        add(TERMINAL_INDEX)
                     }
                     set(index, value)
                 }
 
                 private fun MutableList<Int>.getElement(index: Int): Int {
                     if (index >= size) {
-                        return TERMINAL
+                        return TERMINAL_INDEX
                     }
                     return get(index)
                 }
@@ -196,7 +219,7 @@ class RouteMatcherPerformanceTest {
                     )
             }
 
-            fun first(index: Int) = first.getOrElse(index) { TERMINAL }
+            fun first(index: Int) = first.getOrElse(index) { TERMINAL_INDEX }
             fun next(index: Int) = next[index]
             fun end(index: Int) = end[index]
         }
@@ -215,42 +238,52 @@ class RouteMatcherPerformanceTest {
             return list
         }
 
-        fun matches(route: String): Boolean {
+        fun matches(url: String): Boolean {
             // Traverse and check
-            var routeIndex = 0
+            // FIXME: Code duplication
+            var urlIndex = 0
             var valueIndex = 0
 
-            while (routeIndex < route.length) {
+            while (urlIndex < url.length) {
 
-                var nextValue = graph.first(valueIndex)
+                var nextEdgeIndex = graph.first(valueIndex)
 
-                while (nextValue != -1) {
-                    val end = graph.end(nextValue)
-                    if (values[end] == route[routeIndex]) {
+                while (nextEdgeIndex != -1) {
+                    val end = graph.end(nextEdgeIndex)
+                    val value = values[end]
+
+                    if (value == url[urlIndex]) {
                         valueIndex = end
-                        routeIndex++
+                        urlIndex++
+                        break
+                    } else if (value == PARAMETER_CHAR) {
+                        // Skip to the next separator
+                        while (urlIndex < url.length && url[urlIndex] != SEPARATOR_CHAR) {
+                            urlIndex++
+                        }
+                        valueIndex = end
                         break
                     }
 
-                    nextValue = graph.next(nextValue)
+                    nextEdgeIndex = graph.next(nextEdgeIndex)
                 }
 
-                if (nextValue == -1) {
+                if (nextEdgeIndex == -1) {
                     break
                 }
             }
 
-            return graph.first(valueIndex) == TERMINAL && routeIndex >= route.length // Graph and route fully traversed to match
+            return graph.first(valueIndex) == TERMINAL_INDEX && urlIndex >= url.length // Graph and route should be fully traversed to match
         }
     }
 
     companion object {
         val routes = listOf(
-//                "/test/:user/some/path/here",
+                "/test/:user/some/path/here",
 //                "/test/*/some/more/path/here",
                 "/test/path/route/without/splats",
 //                "/test/has/splat/at/the/end/*",
-//                "/test/:id/simple/route/:user/create/",
+                "/test/:id/simple/route/:user/create/",
 //                "/matches/all/*/user",
 //                "/matches/all/*/user/*/more",
 //                "/test/*",
